@@ -1,13 +1,8 @@
 from flask import Flask
 from config import Config
 from extensions import db, migrate, jwt, cors
-from routes.auth_routes import auth_bp
-from routes.teacher_routes import teacher_bp
-from routes.student_routes import student_bp
-from routes.admin_routes import admin_bp
-from routes.payment_routes import payment_bp
-from models import user, course, payment, certificate
-
+from routes import register_blueprints  
+from models import *  
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
@@ -17,11 +12,7 @@ def create_app():
     jwt.init_app(app)
     cors.init_app(app)
 
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(teacher_bp)
-    app.register_blueprint(student_bp)
-    app.register_blueprint(admin_bp)
-    app.register_blueprint(payment_bp)
+    register_blueprints(app)
 
     return app
 
