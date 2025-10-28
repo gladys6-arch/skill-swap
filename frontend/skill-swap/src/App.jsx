@@ -3,9 +3,9 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from "./context/AuthContext.jsx";
 
 import Navbar from './components/Navbar.jsx';
-import Login from './pages/Login.jsx';
-import Register from './pages/Register.jsx';
-import Home from './pages/Home.jsx';
+import Login from './pages/login.jsx';
+import Register from './pages/register.jsx';
+import Home from './pages/HomePage.jsx';
 
 import AdminRoutes from './Routes/AdminRoutes.jsx';
 import TeacherRoutes from './Routes/TeacherRoutes.jsx';
