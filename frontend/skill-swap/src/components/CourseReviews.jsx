@@ -1,87 +1,77 @@
-import React, { useEffect, useState } from "react";
-import axios from "axios";
-import { useAuth } from "../context/AuthContext.jsx";
-
-const API = "http://127.0.0.1:5000"; // Backend base URL
+import React, { useState, useEffect } from "react";
 
 function CourseReviews({ courseId }) {
-  const { user } = useAuth();
   const [reviews, setReviews] = useState([]);
-  const [rating, setRating] = useState(0);
-  const [comment, setComment] = useState("");
+  const [newReview, setNewReview] = useState("");
+  const [rating, setRating] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  // Fetch reviews when course loads
+  // Fetch reviews when course changes
   useEffect(() => {
-    axios.get(`${API}/courses/${courseId}/reviews`)
-      .then(res => setReviews(res.data))
-      .catch(err => console.error("Error fetching reviews:", err));
+    if (!courseId) return;
+    fetch(`http://127.0.0.1:5000/courses/${courseId}/reviews`)
+      .then((res) => res.json())
+      .then((data) => setReviews(data))
+      .catch((err) => console.error("Error fetching reviews:", err));
   }, [courseId]);
 
-  // Submit a new review
-  const handleSubmit = async (e) => {
+  const submitReview = (e) => {
     e.preventDefault();
-    if (!rating) return alert("Please provide a rating");
+    if (!rating || !newReview) return alert("Please add both rating and review.");
 
-    try {
-      await axios.post(
-        `${API}/courses/${courseId}/reviews`,
-        { rating, comment },
-        { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
-      );
-      alert("Review submitted!");
-      setRating(0);
-      setComment("");
-      const res = await axios.get(`${API}/courses/${courseId}/reviews`);
-      setReviews(res.data);
-    } catch (err) {
-      console.error("Error submitting review:", err);
-      alert("Failed to post review");
-    }
+    setLoading(true);
+    fetch(`http://127.0.0.1:5000/courses/${courseId}/reviews`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating, review: newReview }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        setReviews((prev) => [...prev, data]);
+        setNewReview("");
+        setRating("");
+      })
+      .catch((err) => console.error("Error posting review:", err))
+      .finally(() => setLoading(false));
   };
 
   return (
     <div>
-      <h3>Course Reviews</h3>
+      <h3>Student Reviews</h3>
 
-      {/* Add Review Form (only for students) */}
-      {user?.role === "student" && (
-        <form onSubmit={handleSubmit}>
-          <div>
-            <label>Rating (1–5): </label>
-            <input
-              type="number"
-              min="1"
-              max="5"
-              value={rating}
-              onChange={(e) => setRating(Number(e.target.value))}
-            />
+      <form onSubmit={submitReview}>
+        <label>Rating (1–5): </label>
+        <input
+          type="number"
+          min="1"
+          max="5"
+          value={rating}
+          onChange={(e) => setRating(e.target.value)}
+        />
+        <br />
+        <textarea
+          placeholder="Write your review..."
+          value={newReview}
+          onChange={(e) => setNewReview(e.target.value)}
+        />
+        <br />
+        <button type="submit" disabled={loading}>
+          {loading ? "Submitting..." : "Submit Review"}
+        </button>
+      </form>
+
+      <hr />
+
+      {reviews.length > 0 ? (
+        reviews.map((r, i) => (
+          <div key={i}>
+            <strong>⭐ {r.rating}</strong>
+            <p>{r.review}</p>
           </div>
-          <div>
-            <label>Comment: </label>
-            <textarea
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              rows="3"
-              cols="40"
-            />
-          </div>
-          <button type="submit">Submit Review</button>
-        </form>
+        ))
+      ) : (
+        <p>No reviews yet for this course.</p>
       )}
-
-      {/* Display Reviews */}
-      <ul>
-        {reviews.length > 0 ? (
-          reviews.map((rev) => (
-            <li key={rev.id}>
-              <strong>{rev.user_name}</strong> rated <b>{rev.rating}</b>/5
-              <p>{rev.comment}</p>
-            </li>
-          ))
-        ) : (
-          <p>No reviews yet.</p>
-        )}
-      </ul>
     </div>
   );
 }

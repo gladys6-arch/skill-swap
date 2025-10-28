@@ -1,13 +1,19 @@
+// src/pages/StudentDashboard.jsx
 import React from 'react';
 import { Link } from 'react-router-dom';
 
 export default function StudentDashboard() {
   return (
-    <div className="container mt-4">
+    <div>
       <h2>Student Dashboard</h2>
-      <Link to="/student/courses">Available Courses</Link><br/>
-      <Link to="/student/progress">Progress</Link><br/>
-      <Link to="/student/certificate">Certificates</Link>
+      <nav>
+        <ul>
+          <li><Link to="/student/courses">Available Courses</Link></li>
+          <li><Link to="/student/progress">Progress</Link></li>
+          <li><Link to="/student/certificate">Certificates</Link></li>
+          <li><Link to="/student/reviews">My Course Reviews</Link></li>
+        </ul>
+      </nav>
     </div>
   );
 }
