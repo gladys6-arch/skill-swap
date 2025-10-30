@@ -2,6 +2,17 @@ from flask import Flask
 from flask_cors import CORS
 from extensions import db, jwt
 from config import Config
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # this reads .env file
+
+MPESA_CONSUMER_KEY = os.getenv("MPESA_CONSUMER_KEY")
+MPESA_CONSUMER_SECRET = os.getenv("MPESA_CONSUMER_SECRET")
+MPESA_PASSKEY = os.getenv("MPESA_PASSKEY")
+MPESA_SHORTCODE = os.getenv("MPESA_SHORTCODE")
+
+
 
 def create_app():
     app = Flask(__name__)
