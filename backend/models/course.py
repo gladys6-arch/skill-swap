@@ -9,6 +9,7 @@ class Course(db.Model):
     description = db.Column(db.Text)
     price = db.Column(db.Float)
     link = db.Column(db.String(255)) 
+    teacher_name = db.Column(db.String(100))
     teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     # Relationships
     teacher = db.relationship('User', back_populates='taught_courses')

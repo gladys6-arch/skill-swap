@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../components/AuthContext.jsx"; // use context
 
-function Login({ onLogin }) {
+function Login() {
   const navigate = useNavigate();
-
+  const { login } = useAuth(); // use global login function
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -12,7 +13,7 @@ function Login({ onLogin }) {
     e.preventDefault();
 
     try {
-      const response = await fetch("http://127.0.0.1:5000/auth/login", {
+      const response = await fetch("http://127.0.0.1:5000/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -25,14 +26,14 @@ function Login({ onLogin }) {
         return;
       }
 
-      // Save token locally
-      localStorage.setItem("token", data.token);
+      // Save user globally using AuthContext
+      login({ email, role: data.role, token: data.token });
 
-      // Save user info globally
-      onLogin({ email, role: data.role });
-
-      // Redirect to homepage
-      navigate("/");
+      // Redirect to role-based dashboard
+      if (data.role === "admin") navigate("/admin");
+      else if (data.role === "teacher") navigate("/teacher");
+      else if (data.role === "student") navigate("/student");
+      else navigate("/");
 
     } catch (err) {
       console.error("Login error:", err);

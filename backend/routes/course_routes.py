@@ -1,11 +1,11 @@
 # routes/course_routes.py
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, Course, User
+from models import db, Course, User, Payment
 
 course_bp = Blueprint('course_bp', __name__)
 
-# Teacher adds a course
+# TEACHER: Add a new course
 @course_bp.route('/teacher/add-course', methods=['POST'])
 @jwt_required()
 def add_course():
@@ -19,9 +19,10 @@ def add_course():
     new_course = Course(
         title=data['title'],
         description=data['description'],
-        link=data['link'],
         price=data['price'],
-        teacher_name=user.name
+        link=data['link'],  # link to external learning website
+        teacher_name=user.name,
+        teacher_id=user.id
     )
     db.session.add(new_course)
     db.session.commit()
@@ -29,7 +30,7 @@ def add_course():
     return jsonify({'msg': 'Course added successfully'}), 201
 
 
-# Student views all available courses
+# STUDENT: View all available courses
 @course_bp.route('/student/courses', methods=['GET'])
 def get_courses():
     courses = Course.query.all()
@@ -40,12 +41,13 @@ def get_courses():
             'description': c.description,
             'price': c.price,
             'teacher_name': c.teacher_name
-        } for c in courses
+        }
+        for c in courses
     ]
     return jsonify(result), 200
 
 
-# Student views one course by ID
+#  STUDENT: View a single course by ID
 @course_bp.route('/student/course/<int:course_id>', methods=['GET'])
 def get_course(course_id):
     course = Course.query.get(course_id)
@@ -57,6 +59,24 @@ def get_course(course_id):
         'title': course.title,
         'description': course.description,
         'price': course.price,
-        'teacher_name': course.teacher_name,
-        'link': course.link
+        'teacher_name': course.teacher_name
     }), 200
+
+
+#  STUDENT: Access the external link (only after payment)
+@course_bp.route('/student/course/<int:course_id>/access', methods=['GET'])
+@jwt_required()
+def access_course(course_id):
+    current_user_email = get_jwt_identity()
+    user = User.query.filter_by(email=current_user_email).first()
+
+    # Verify payment
+    payment = Payment.query.filter_by(student_id=user.id, course_id=course_id, status='completed').first()
+    if not payment:
+        return jsonify({'msg': 'You must complete payment to access this course'}), 403
+
+    course = Course.query.get(course_id)
+    if not course:
+        return jsonify({'msg': 'Course not found'}), 404
+
+    return jsonify({'link': course.link}), 200
