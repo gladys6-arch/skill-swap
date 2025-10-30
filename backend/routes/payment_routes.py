@@ -3,6 +3,8 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import requests, base64, datetime, json
 from models import db, Payment, Course, User
+from utils.decorators import role_required
+
 
 payment_bp = Blueprint('payment_bp', __name__)
 
@@ -96,9 +98,7 @@ def payment_callback():
     try:
         body = data.get("Body", {})
         stk_callback = body.get("stkCallback", {})
-
         result_code = stk_callback.get("ResultCode")
-        merchant_request_id = stk_callback.get("MerchantRequestID")
 
         # Only process successful payments
         if result_code == 0:
@@ -107,20 +107,40 @@ def payment_callback():
             amount = next((item["Value"] for item in callback_metadata if item["Name"] == "Amount"), None)
             phone = next((item["Value"] for item in callback_metadata if item["Name"] == "PhoneNumber"), None)
 
-            # Find payment record by student phone + pending status
-            from models import Payment, User
+            # Find student using phone
+            from models import Payment, User, Course
             student = User.query.filter_by(phone_number=phone).first()
-            if student:
-                payment = Payment.query.filter_by(student_id=student.id, status="Pending").order_by(Payment.date.desc()).first()
-                if payment:
-                    payment.status = "Paid"
-                    db.session.commit()
-                    print(f"Payment successful: {mpesa_code}")
+            if not student:
+                return jsonify({"ResultCode": 1, "ResultDesc": "Student not found"}), 404
+
+            # Find the latest pending payment
+            payment = Payment.query.filter_by(student_id=student.id, status="Pending").order_by(Payment.id.desc()).first()
+            if not payment:
+                return jsonify({"ResultCode": 1, "ResultDesc": "Payment record not found"}), 404
+
+            # Mark payment as paid
+            payment.status = "Paid"
+
+            # Fetch course and teacher
+            course = Course.query.get(payment.course_id)
+            teacher = User.query.get(course.teacher_id) if course else None
+
+            if teacher:
+                teacher.balance += payment.teacher_share  # Add teacher's 80% share
+                print(f"Teacher {teacher.name} credited KES {payment.teacher_share}")
+
+            # Admin share logic (optional: add admin user or just log)
+            print(f"Admin share: KES {payment.admin_share}")
+
+            db.session.commit()
+            print(f"Payment successful: {mpesa_code}")
 
         return jsonify({"ResultCode": 0, "ResultDesc": "Payment processed successfully"})
+
     except Exception as e:
         print("Error processing callback:", e)
         return jsonify({"ResultCode": 1, "ResultDesc": "Callback error"})
+
     
 @payment_bp.route('/status/<int:course_id>', methods=['GET'])
 @jwt_required()
@@ -137,4 +157,11 @@ def check_payment_status(course_id):
         return jsonify({"paid": True})
     return jsonify({"paid": False})
 
-
+@payment_bp.route('/teacher/balance', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def get_teacher_balance():
+    current_user_email = get_jwt_identity()
+    from models import User
+    teacher = User.query.filter_by(email=current_user_email).first()
+    return jsonify({"balance": teacher.balance})
