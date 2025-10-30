@@ -165,3 +165,18 @@ def get_teacher_balance():
     from models import User
     teacher = User.query.filter_by(email=current_user_email).first()
     return jsonify({"balance": teacher.balance})
+
+@payment_bp.route('/admin-summary', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def admin_summary():
+    # Only include successful payments
+    payments = Payment.query.filter_by(status="Paid").all()
+
+    total_admin_share = sum(p.admin_share for p in payments if p.admin_share)
+    total_collected = sum(p.amount for p in payments if p.amount)
+
+    return jsonify({
+        "total_collected": total_collected,
+        "total_admin_share": total_admin_share
+    })
