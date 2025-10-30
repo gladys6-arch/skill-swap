@@ -2,16 +2,17 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
 
-const API = "http://127.0.0.1:5000/api"; // adjust if your backend URL is different
+const API = "http://127.0.0.1:5000/api"; // adjust if backend URL changes
 
 export default function CourseDetails() {
-  const { id } = useParams(); // get course ID from URL
+  const { id } = useParams(); // Get course ID from URL
   const [course, setCourse] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [isPaying, setIsPaying] = useState(false);
+  const token = localStorage.getItem("token");
 
-  // Fetch the selected course by ID
+  // Fetch the course by ID
   useEffect(() => {
     const fetchCourse = async () => {
       try {
@@ -28,23 +29,23 @@ export default function CourseDetails() {
     fetchCourse();
   }, [id]);
 
+  // Handle payment
   const handlePayment = async () => {
     if (!course) return;
     setIsPaying(true);
 
     try {
-      const token = localStorage.getItem("token");
       const res = await axios.post(
-        `${API}/payment/initiate`,
-        { amount: course.price, course_id: course.id },
+        `${API}/payment/process`,
+        { course_id: course.id, amount: course.price },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      alert("M-Pesa payment initiated! Please check your phone.");
-      console.log("Payment response:", res.data);
+      console.log("Payment success:", res.data);
+      alert("Payment successful! You now have access to the course.");
     } catch (err) {
-      console.error("Payment error:", err);
-      alert("Failed to start payment. Try again.");
+      console.error("Payment error:", err.response?.data || err.message);
+      alert(" Payment failed. Please try again later.");
     } finally {
       setIsPaying(false);
     }
@@ -71,7 +72,7 @@ export default function CourseDetails() {
           onClick={handlePayment}
           disabled={isPaying}
         >
-          {isPaying ? "Processing Payment..." : "Start Course (Pay with M-Pesa)"}
+          {isPaying ? "Processing Payment..." : "Pay & Start Course"}
         </button>
       </div>
     </div>

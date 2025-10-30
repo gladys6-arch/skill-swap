@@ -1,221 +1,140 @@
 # routes/payment_routes.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from extensions import db
-from models import Payment, Course, User
-from utils.decorators import role_required
-from datetime import datetime
-import os, base64, requests
+import requests, base64, datetime, json
+from models import db, Payment, Course, User
 
-payment_bp = Blueprint("payment_bp", __name__)
+payment_bp = Blueprint('payment_bp', __name__)
 
-# --- Helper functions (now inline) ---
+# Generate M-Pesa access token
 def get_access_token():
-    consumer_key = os.getenv("MPESA_CONSUMER_KEY")
-    consumer_secret = os.getenv("MPESA_CONSUMER_SECRET")
+    consumer_key = current_app.config['MPESA_CONSUMER_KEY']
+    consumer_secret = current_app.config['MPESA_CONSUMER_SECRET']
+    response = requests.get(
+        "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
+        auth=(consumer_key, consumer_secret)
+    )
+    return response.json().get('access_token')
 
-    url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-    response = requests.get(url, auth=(consumer_key, consumer_secret))
-    return response.json().get("access_token")
-
-def generate_password():
-    shortcode = os.getenv("MPESA_SHORTCODE")
-    passkey = os.getenv("MPESA_PASSKEY")
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    password = base64.b64encode(f"{shortcode}{passkey}{timestamp}".encode()).decode()
-    return password, timestamp
-
-
-# --- Basic info route ---
-@payment_bp.route("/", methods=["GET"])
-def payment_info():
-    return jsonify({
-        "message": "SkillHub Payment API",
-        "endpoints": {
-            "process": "POST /api/payment/process",
-            "callback": "POST /api/payment/callback",
-            "student_history": "GET /api/payment/history",
-            "teacher_earnings": "GET /api/payment/teacher-earnings",
-            "admin_summary": "GET /api/payment/admin-summary",
-        },
-        "status": "active"
-    })
-
-
-# --- Student initiates M-Pesa payment ---
-@payment_bp.route("/process", methods=["POST"])
+# Initialize STK Push
+@payment_bp.route('/initiate', methods=['POST'])
 @jwt_required()
-@role_required("student")
-def process_payment():
+def initiate_payment():
     data = request.get_json()
-    student_email = get_jwt_identity()
-    student = User.query.filter_by(email=student_email).first()
+    amount = data.get("amount")
+    course_id = data.get("course_id")
 
-    if not student:
-        return jsonify({"msg": "Student not found"}), 404
+    if not amount or not course_id:
+        return jsonify({"msg": "Amount and course_id are required"}), 400
 
-    course = Course.query.get(data.get("course_id"))
+    # Get current student
+    current_user_email = get_jwt_identity()
+    student = User.query.filter_by(email=current_user_email).first()
+
+    if not student or student.role != "student":
+        return jsonify({"msg": "Unauthorized access"}), 403
+
+    # Fetch course
+    course = Course.query.get(course_id)
     if not course:
         return jsonify({"msg": "Course not found"}), 404
 
-    amount = float(data.get("amount", 0))
-    if amount <= 0:
-        return jsonify({"msg": "Invalid amount"}), 400
-
     access_token = get_access_token()
-    password, timestamp = generate_password()
+    if not access_token:
+        return jsonify({"msg": "Failed to generate M-Pesa token"}), 500
+
+    # Prepare STK Push data
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    shortcode = current_app.config['MPESA_SHORTCODE']
+    passkey = current_app.config['MPESA_PASSKEY']
+    password = base64.b64encode((shortcode + passkey + timestamp).encode()).decode()
 
     payload = {
-        "BusinessShortCode": os.getenv("MPESA_SHORTCODE"),
+        "BusinessShortCode": shortcode,
         "Password": password,
         "Timestamp": timestamp,
         "TransactionType": "CustomerPayBillOnline",
         "Amount": amount,
-        "PartyA": student.phone_number,  # ensure you have this field in User
-        "PartyB": os.getenv("MPESA_SHORTCODE"),
+        "PartyA": student.phone_number,  # you must store student phone number in your user model
+        "PartyB": shortcode,
         "PhoneNumber": student.phone_number,
-        "CallBackURL": os.getenv("MPESA_CALLBACK_URL"),
-        "AccountReference": f"COURSE-{course.id}",
+        "CallBackURL": current_app.config['CALLBACK_URL'],
+        "AccountReference": f"Course_{course_id}",
         "TransactionDesc": f"Payment for {course.title}"
     }
 
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-
-    response = requests.post(
+    headers = {"Authorization": f"Bearer {access_token}"}
+    res = requests.post(
         "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
-        headers=headers,
-        json=payload
+        json=payload,
+        headers=headers
     )
 
-    result = response.json()
-
-    # Save initial payment info
-    teacher = course.teacher
-    payment = Payment(
+    # Store payment in DB
+    payment_data = res.json()
+    new_payment = Payment(
         student_id=student.id,
-        teacher_id=teacher.id,
         course_id=course.id,
         amount=amount,
-        teacher_share=round(amount * 0.8, 2),
-        admin_share=round(amount * 0.2, 2),
-        status="Pending",
-        transaction_id=result.get("CheckoutRequestID")
+        status="Pending"
     )
-    db.session.add(payment)
+    db.session.add(new_payment)
     db.session.commit()
 
     return jsonify({
-        "msg": "M-Pesa STK Push initiated.",
-        "checkout_id": result.get("CheckoutRequestID"),
-        "response": result
+        "msg": "STK Push initiated. Check your phone to complete the payment.",
+        "response": payment_data
     }), 200
 
 
-# --- M-Pesa callback route ---
-@payment_bp.route("/callback", methods=["POST"])
+# Callback from Safaricom (after payment)
+@payment_bp.route('/callback', methods=['POST'])
 def payment_callback():
     data = request.get_json()
-    stk_callback = data.get("Body", {}).get("stkCallback", {})
-    checkout_id = stk_callback.get("CheckoutRequestID")
-    result_code = stk_callback.get("ResultCode")
+    print("M-PESA CALLBACK:", json.dumps(data, indent=4))
 
-    payment = Payment.query.filter_by(transaction_id=checkout_id).first()
-    if not payment:
-        return jsonify({"msg": "Payment not found"}), 404
+    try:
+        body = data.get("Body", {})
+        stk_callback = body.get("stkCallback", {})
 
-    if result_code == 0:
-        payment.status = "Completed"
-    else:
-        payment.status = "Failed"
+        result_code = stk_callback.get("ResultCode")
+        merchant_request_id = stk_callback.get("MerchantRequestID")
 
-    db.session.commit()
+        # Only process successful payments
+        if result_code == 0:
+            callback_metadata = stk_callback.get("CallbackMetadata", {}).get("Item", [])
+            mpesa_code = next((item["Value"] for item in callback_metadata if item["Name"] == "MpesaReceiptNumber"), None)
+            amount = next((item["Value"] for item in callback_metadata if item["Name"] == "Amount"), None)
+            phone = next((item["Value"] for item in callback_metadata if item["Name"] == "PhoneNumber"), None)
 
-    return jsonify({"msg": "Callback processed successfully"}), 200
+            # Find payment record by student phone + pending status
+            from models import Payment, User
+            student = User.query.filter_by(phone_number=phone).first()
+            if student:
+                payment = Payment.query.filter_by(student_id=student.id, status="Pending").order_by(Payment.date.desc()).first()
+                if payment:
+                    payment.status = "Paid"
+                    db.session.commit()
+                    print(f"Payment successful: {mpesa_code}")
 
-
-# --- Student views payment history ---
-@payment_bp.route("/history", methods=["GET"])
+        return jsonify({"ResultCode": 0, "ResultDesc": "Payment processed successfully"})
+    except Exception as e:
+        print("Error processing callback:", e)
+        return jsonify({"ResultCode": 1, "ResultDesc": "Callback error"})
+    
+@payment_bp.route('/status/<int:course_id>', methods=['GET'])
 @jwt_required()
-@role_required("student")
-def payment_history():
-    student_email = get_jwt_identity()
-    student = User.query.filter_by(email=student_email).first()
+def check_payment_status(course_id):
+    current_user_email = get_jwt_identity()
+    from models import User
+    student = User.query.filter_by(email=current_user_email).first()
+
     if not student:
-        return jsonify({"msg": "Student not found"}), 404
+        return jsonify({"msg": "User not found"}), 404
 
-    payments = Payment.query.filter_by(student_id=student.id).all()
-    return jsonify([
-        {
-            "id": p.id,
-            "course_id": p.course_id,
-            "amount": p.amount,
-            "status": p.status,
-            "date": p.timestamp.strftime("%Y-%m-%d %H:%M")
-        } for p in payments
-    ]), 200
+    payment = Payment.query.filter_by(student_id=student.id, course_id=course_id, status="Paid").first()
+    if payment:
+        return jsonify({"paid": True})
+    return jsonify({"paid": False})
 
 
-# --- Teacher views their earnings ---
-@payment_bp.route("/teacher-earnings", methods=["GET"])
-@jwt_required()
-@role_required("teacher")
-def teacher_earnings():
-    teacher_email = get_jwt_identity()
-    teacher = User.query.filter_by(email=teacher_email).first()
-    if not teacher:
-        return jsonify({"msg": "Teacher not found"}), 404
-
-    payments = Payment.query.filter_by(teacher_id=teacher.id, status="Completed").all()
-    total_earned = sum(p.teacher_share for p in payments)
-    unpaid = sum(p.teacher_share for p in payments if not p.teacher_paid)
-
-    return jsonify({
-        "teacher": teacher.name,
-        "total_earned": total_earned,
-        "unpaid_balance": unpaid,
-        "payments": [
-            {
-                "course_id": p.course_id,
-                "amount": p.amount,
-                "teacher_share": p.teacher_share,
-                "paid": p.teacher_paid,
-                "date": p.timestamp.strftime("%Y-%m-%d %H:%M")
-            } for p in payments
-        ]
-    }), 200
-
-
-# --- Admin summary and teacher payout ---
-@payment_bp.route("/admin-summary", methods=["GET"])
-@jwt_required()
-@role_required("admin")
-def admin_summary():
-    payments = Payment.query.filter_by(status="Completed").all()
-    total_collected = sum(p.amount for p in payments)
-    total_teacher_share = sum(p.teacher_share for p in payments)
-    total_admin_share = sum(p.admin_share for p in payments)
-
-    return jsonify({
-        "total_collected": total_collected,
-        "total_teacher_share": total_teacher_share,
-        "total_admin_share": total_admin_share,
-        "payments_count": len(payments)
-    }), 200
-
-
-# --- Admin marks teacher payout as complete ---
-@payment_bp.route("/mark-paid/<int:payment_id>", methods=["PUT"])
-@jwt_required()
-@role_required("admin")
-def mark_teacher_paid(payment_id):
-    payment = Payment.query.get(payment_id)
-    if not payment:
-        return jsonify({"msg": "Payment not found"}), 404
-
-    payment.teacher_paid = True
-    db.session.commit()
-
-    return jsonify({"msg": f"Teacher payment marked as complete for Payment ID {payment_id}"}), 200
