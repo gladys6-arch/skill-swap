@@ -11,6 +11,7 @@ class Course(db.Model):
     link = db.Column(db.String(255)) 
     teacher_name = db.Column(db.String(100))
     teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    course_link = db.Column(db.String(500))
     # Relationships
     teacher = db.relationship('User', back_populates='taught_courses')
     modules = db.relationship('Module', back_populates='course', cascade="all, delete-orphan")

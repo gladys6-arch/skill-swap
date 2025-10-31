@@ -180,3 +180,23 @@ def admin_summary():
         "total_collected": total_collected,
         "total_admin_share": total_admin_share
     })
+
+@payment_bp.route('/access/<int:course_id>', methods=['GET'])
+@jwt_required()
+@role_required('student')
+def access_course(course_id):
+    student_email = get_jwt_identity()
+    student = User.query.filter_by(email=student_email).first()
+
+    payment = Payment.query.filter_by(
+        student_id=student.id, course_id=course_id, status="Paid"
+    ).first()
+
+    if not payment:
+        return jsonify({"msg": "You have not paid for this course"}), 403
+
+    course = Course.query.get(course_id)
+    return jsonify({
+        "course_title": course.title,
+        "course_link": course.course_link
+    })
